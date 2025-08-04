@@ -1,6 +1,7 @@
 import userModel from "../models/user.model.js";
 import * as userService from "../services/user.service.js";
 import { validationResult } from "express-validator";
+import redisClient from "../services/redis.service.js";
 
 export const createUserController = async (req, res) => {
     const errors = validationResult(req);
@@ -11,6 +12,7 @@ export const createUserController = async (req, res) => {
     try {
         const user = await userService.createrUser(req.body);
         const token = await user.generateJWT();
+        delete user._doc.password;
         res.status(201).json({user,token});
     } catch (error) {
         console.error("Error creating user:", error);
@@ -29,7 +31,8 @@ export const loginController = async (req, res) => {
 
     try {
         const user = await userService.loginUser(req.body);
-        const token = user.generateJWT(); // Removed await since it's not async
+        const token = user.generateJWT();
+        delete user._doc.password;
         res.status(200).json({ user, token });
     } catch (error) {
         console.error("Error logging in:", error);
@@ -45,4 +48,26 @@ export const loginController = async (req, res) => {
 export const profileController = async (req, res) => {
    console.log(req.user);
    res.status(200).json({user:req.user})
+}
+
+export const logoutController = async (req, res) => {
+    try {
+        const token = req.cookies.token || req.headers.authorization?.split(' ')[1];
+        if (!token) {
+            return res.status(401).json({ error: 'No token provided' });
+        }
+
+        const isBLacklisted = await redisClient.get(token);
+        if (isBLacklisted) {
+            res.cookie('token', '');
+            return res.status(401).json({ error: 'Token is blacklisted' });
+        }
+
+        await redisClient.set(token, 'invalid', 'EX', 3600);
+
+        res.status(200).json({ message: 'Logged out successfully' });
+    } catch (error) {
+        console.error("Error logging out:", error);
+        res.status(500).json({ error: error.message || "Internal server error" });
+    }
 }
