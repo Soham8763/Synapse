@@ -7,14 +7,11 @@ import connectDB from './db/db.js';
 connectDB();
 import userRoutes from './routes/user.route.js';
 import cookieParser from 'cookie-parser';
+import projectRoutes from './routes/project.routes.js';
 
 const app = express();
 
-// Middleware
-app.use(cors({
-  origin: 'http://localhost:5173', // Vite's default port
-  credentials: true
-}));
+app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({extended:true}));
 app.use(morgan('dev'));
@@ -29,6 +26,7 @@ app.use((err, req, res, next) => {
 });
 
 app.use('/users', userRoutes);
+app.use('/projects', projectRoutes);
 
 app.get('/',(req,res)=>{
     res.send("hello devs");
