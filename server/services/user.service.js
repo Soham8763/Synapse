@@ -36,3 +36,10 @@ export const loginUser = async (userData) => {
 
     return user;
 }
+
+export const getAllUsers = async ({userId}) => {
+    const users = await userModel.find({
+        _id: { $ne: userId }
+    });
+    return users;
+}

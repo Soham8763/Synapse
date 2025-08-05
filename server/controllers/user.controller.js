@@ -71,3 +71,14 @@ export const logoutController = async (req, res) => {
         res.status(500).json({ error: error.message || "Internal server error" });
     }
 }
+
+export const getAllUsersController = async (req, res) => {
+    try {
+        const loggedInUser = await userModel.findOne({ email: req.user.email });
+        const allUsers = await userService.getAllUsers({userId: loggedInUser._id});
+        res.status(200).json({ users: allUsers });
+    } catch (error) {
+        console.error("Error fetching users:", error);
+        res.status(500).json({ error: error.message || "Internal server error" });
+    }
+}
