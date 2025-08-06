@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useContext, useEffect } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import {
   User,
@@ -8,40 +8,58 @@ import {
   UserRoundCheck,
   UserPlus,
 } from "lucide-react";
-import { useEffect } from "react";
 import axiosInstance from "../config/axios";
+import { initializeSocket, recieveMessage, sendMessage } from "../config/socket";
+import { UserContext } from '../context/user.context'
+import { useRef } from "react";
 
 const Projects = () => {
-    const location = useLocation();
+  const location = useLocation();
+  const params = useParams();
   const [isSidePannelOpen, setIsSidePannelOpen] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedUserId, setSelectedUserId] = useState(new Set());
   const [users, setUsers] = useState([]);
   const [currentProject, setCurrentProject] = useState(null);
-    const [project, setProject] = useState(location.state?.project || null);
+  const [project, setProject] = useState(location.state?.project || null);
+  const [message, setMessage] = useState('');
+  const messageBox = useRef();
+  const { user } = useContext(UserContext);
 
-
-
+  // First useEffect - handle project initialization
   useEffect(() => {
-    if (location.state?.project) {
-      console.log("Using project from location state");
-      setCurrentProject(location.state.project);
-    } else if (params.projectId) {
-      console.log("Fetching project from URL params:", params.projectId);
-      axiosInstance.get(`/projects/${params.projectId}`)
-        .then(response => {
+    const initializeProject = async () => {
+      let projectData = null;
+
+      if (location.state?.project) {
+        console.log("Using project from location state");
+        projectData = location.state.project;
+      } else if (params.projectId) {
+        console.log("Fetching project from URL params:", params.projectId);
+        try {
+          const response = await axiosInstance.get(`/projects/${params.projectId}`);
           console.log("Fetched project:", response.data);
-          setCurrentProject(response.data.project);
-        })
-        .catch(error => {
+          projectData = response.data.project;
+        } catch (error) {
           console.error("Error fetching project:", error);
-        });
-    } else {
-      console.error("No project data available from state or URL params");
-    }
-  }, [location]);
+          return;
+        }
+      } else {
+        console.error("No project data available from state or URL params");
+        return;
+      }
 
+      // Set both project states
+      setCurrentProject(projectData);
+      setProject(projectData);
+    };
+
+    initializeProject();
+  }, [location, params.projectId]);
+
+  // Second useEffect - handle socket initialization and data fetching
   useEffect(() => {
+    // Fetch all users (this doesn't depend on project)
     axiosInstance.get("/users/all")
       .then((response) => {
         console.log("All users:", response.data);
@@ -51,15 +69,62 @@ const Projects = () => {
         console.error("Error fetching users:", error);
       });
 
-    axiosInstance.get(`/projects/get-project/${location.state?.project?._id}`)
-      .then((response) => {
-        console.log("All projects:", response.data.project);
-        setProject(response.data.project);
-      })
-      .catch((error) => {
-        console.error("Error fetching projects:", error);
+    // Only initialize socket and fetch additional project data if we have a project
+    if (project?._id) {
+      console.log("Initializing socket for project:", project._id);
+      const token = localStorage.getItem('token'); // or however you store your auth token
+      initializeSocket(project._id, token);
+
+      recieveMessage('project-message', data => {
+        console.log("Received message:", data);
+        appendIncomingMessage(data);
       });
-  }, []);
+
+      // Fetch latest project details
+      axiosInstance.get(`/projects/get-project/${project._id}`)
+        .then((response) => {
+          console.log("Updated project data:", response.data.project);
+          setProject(response.data.project);
+        })
+        .catch((error) => {
+          console.error("Error fetching project details:", error);
+        });
+    }
+  }, [project?._id]); // Re-run when project._id changes
+
+  function send() {
+    console.log('Send function called');
+    console.log('Project state:', project);
+    console.log('User state:', user);
+    console.log('Message:', message);
+
+    // Add null check before sending
+    if (!project?._id) {
+      console.error("Cannot send message: project not loaded");
+      alert("Project not loaded yet. Please wait a moment and try again.");
+      return;
+    }
+
+    if (!message.trim()) {
+      console.error("Cannot send empty message");
+      return;
+    }
+
+    if (!user?._id) {
+      console.error("Cannot send message: user not loaded");
+      return;
+    }
+
+    console.log('Sending message to project:', project._id);
+    sendMessage('project-message', {
+      message: message,
+      sender: user,
+      projectId: project._id // Add this for extra safety
+    });
+    appendOutgoingMessage(message);
+    console.log('Message sent successfully');
+    setMessage('');
+  }
 
   function handleAddCollaborators() {
     let projectId = null;
@@ -99,6 +164,11 @@ const Projects = () => {
         console.log("Users added to project:", response.data);
         setSelectedUserId(new Set());
         setIsModalOpen(false);
+        // Optionally refresh project data
+        axiosInstance.get(`/projects/get-project/${projectId}`)
+          .then((response) => {
+            setProject(response.data.project);
+          });
       })
       .catch((error) => {
         console.error("Error adding users to project:", error);
@@ -106,6 +176,36 @@ const Projects = () => {
       });
   }
 
+  // Show loading state if project is not loaded
+  if (!project) {
+    return (
+      <main className="h-screen w-screen flex items-center justify-center">
+        <div>Loading project...</div>
+      </main>
+    );
+  }
+
+  function appendIncomingMessage(messageObject) {
+    const messageBox = document.querySelector(".message-box");
+    const message = document.createElement("div");
+    message.classList.add("message","max-w-56","flex","flex-col","p-3","mb-3","bg-white","border","border-gray-200","rounded-lg","shadow-sm");
+    message.innerHTML = `
+      <small class='text-gray-500 text-xs font-medium mb-1'>${messageObject.sender.email}</small>
+      <p class='text-black text-sm leading-relaxed'>${messageObject.message}</p>
+    `;
+    messageBox.appendChild(message);
+  }
+
+  function appendOutgoingMessage(message) {
+    const messageBox = document.querySelector(".message-box");
+    const newMessage = document.createElement("div");
+    newMessage.classList.add("ml-auto","message","max-w-56","flex","flex-col","p-3","mb-3","bg-white","border","border-blue-200","rounded-lg","shadow-sm");
+    newMessage.innerHTML = `
+      <small class='text-blue-600 text-xs font-medium mb-1'>${user.email}</small>
+      <p class='text-black text-sm leading-relaxed'>${message}</p>
+    `;
+    messageBox.appendChild(newMessage);
+  }
   return (
     <main className="h-screen w-screen flex">
       <section className="left relative h-full flex flex-col min-w-96 bg-slate-400">
@@ -118,8 +218,10 @@ const Projects = () => {
               <UserPlus className="mr-1" />
               <p>Add collaborator</p>
             </button>
-            {currentProject && (
-              <p className="text-sm text-gray-600">Project: {currentProject.name}</p>
+            {(currentProject || project) && (
+              <p className="text-sm text-gray-600">
+                Project: {currentProject?.name || project?.name}
+              </p>
             )}
           </div>
           <button
@@ -131,29 +233,26 @@ const Projects = () => {
         </header>
 
         <div className="conversation-area flex-grow flex flex-col">
-          <div className="message-box p-2 flex-grow flex flex-col gap-2">
-            <div className="message max-w-56 flex flex-col gap-1 p-2 bg-slate-50 w-fit rounded-md">
-              <small className="text-gray-500 opacity-65 text-xs">
-                example@example.com
-              </small>
-              <p className="text-sm">Lorem, ipsum dolor sit amet</p>
-            </div>
-            <div className="ml-auto max-w-56 message flex flex-col gap-1 p-2 bg-slate-50 w-fit rounded-md">
-              <small className="text-gray-500 opacity-65 text-xs">
-                example@example.com
-              </small>
-              <p className="text-sm">Lorem, ipsum dolor sit amet</p>
-            </div>
-          </div>
-
-          <div className="input-field w-full flex">
+          <div ref={messageBox} className="message-box p-2 flex-grow flex flex-col gap-2"></div>
+          <div className="input-field w-full flex gap-2 p-2">
             <input
-              className="p-2 px-4 border-none outline-none flex-grow"
+              value={message}
+              onChange={(e) => { setMessage(e.target.value) }}
+              className="p-2 px-4 border-none outline-none flex-grow bg-slate-100 rounded-md"
               type="text"
               placeholder="Enter your Message"
+              onKeyPress={(e) => {
+                if (e.key === 'Enter') {
+                  send();
+                }
+              }}
             />
-            <button className="p-2">
-              <SendHorizontal />
+            <button
+              onClick={send}
+              disabled={!message.trim() || !project?._id}
+              className="p-2 rounded-md bg-slate-500 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <SendHorizontal className="text-white" />
             </button>
           </div>
         </div>
@@ -173,17 +272,17 @@ const Projects = () => {
             </button>
           </header>
           <div className="users flex flex-col gap-2 p-2">
-            {project.users && project.users.map((user)=>{
-                return (
-                  <div className="users flex flex-col gap-2 p-2">
-                    <div className="user cursor-pointer hover:bg-slate-300 p-2 flex gap-2 items-center">
-                      <div className="aspect-square rounded-full w-fit h-fit flex items-center text-white justify-center p-5 bg-slate-500">
-                        <UserRoundCheck className="absolute" />
-                      </div>
-                      <h1 className="font-semibold text-lg">{user.email}</h1>
+            {project.users && project.users.map((user, index) => {
+              return (
+                <div key={user._id || index} className="users flex flex-col gap-2 p-2">
+                  <div className="user cursor-pointer hover:bg-slate-300 p-2 flex gap-2 items-center">
+                    <div className="aspect-square rounded-full w-fit h-fit flex items-center text-white justify-center p-5 bg-slate-500">
+                      <UserRoundCheck className="absolute" />
                     </div>
+                    <h1 className="font-semibold text-lg">{user.email}</h1>
                   </div>
-                );
+                </div>
+              );
             })}
           </div>
         </div>
