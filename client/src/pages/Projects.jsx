@@ -69,7 +69,7 @@ const Projects = () => {
         console.error("Error fetching users:", error);
       });
 
-    // Only initialize socket and fetch additional project data if we have a project
+
     if (project?._id) {
       console.log("Initializing socket for project:", project._id);
       const token = localStorage.getItem('token'); // or however you store your auth token
